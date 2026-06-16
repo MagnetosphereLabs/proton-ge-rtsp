@@ -1,0 +1,50 @@
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index 08117c4c2b0..f4c7a9b7c01 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -73,6 +73,27 @@ static BOOL get_fast_polling_override(void)
+     return val == 1;
+ }
+ 
++static UINT32 get_capture_buffer_ms_override(void)
++{
++    static int val = -1;
++
++    if (val == -1)
++    {
++        const char *env = getenv("WINEPULSE_CAPTURE_BUFFER_MS");
++
++        if (env && atoi(env) > 0)
++            val = atoi(env);
++        else
++            val = 0;
++
++        if (val)
++            TRACE("Capture buffer override enabled: %d ms\n", val);
++    }
++
++    return val > 0 ? val : 0;
++}
++
+ enum phys_device_bus_type {
+     phys_device_bus_invalid = -1,
+     phys_device_bus_pci,
+@@ -1296,6 +1317,17 @@ static NTSTATUS pulse_create_stream(void *args)
+ 
+     stream->bufsize_frames = ceil((params->duration / 10000000.) * params->fmt->nSamplesPerSec);
++
++    if (stream->dataflow == eCapture)
++    {
++        UINT32 capture_buffer_ms = get_capture_buffer_ms_override();
++
++        if (capture_buffer_ms)
++        {
++            SIZE_T min_capture_frames = ((SIZE_T)params->fmt->nSamplesPerSec * capture_buffer_ms + 999) / 1000;
++            if (stream->bufsize_frames < min_capture_frames)
++                stream->bufsize_frames = min_capture_frames;
++        }
++    }
++
+     bufsize_bytes = stream->bufsize_frames * pa_frame_size(&stream->ss);
+     stream->mmdev_period_usec = params->period / (get_fast_polling_override() ? 50 : 10);
+ 
