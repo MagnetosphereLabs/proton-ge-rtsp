@@ -517,6 +517,9 @@ apply_all_in_dir() {
     echo "WINE: Add winepulse fast polling env variable"
     apply_patch "../patches/proton/winepulse-fast-polling.patch"
 
+    echo "WINE: Add winepulse capture buffer override env variable"
+    apply_patch "../patches/proton/winepulse-capture-buffer-ms.patch"
+
     echo "WINE: Add an env variable to override channel count in winealsa"
     apply_patch "../patches/proton/winealsa-override-channel-count.patch"
 
