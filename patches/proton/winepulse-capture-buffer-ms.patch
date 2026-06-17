@@ -2,7 +2,7 @@ diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
 index 08117c4c2b0..8d3f7c2c9a1 100644
 --- a/dlls/winepulse.drv/pulse.c
 +++ b/dlls/winepulse.drv/pulse.c
-@@ -73,6 +73,68 @@ static BOOL get_fast_polling_override(void)
+@@ -73,6 +73,60 @@ static BOOL get_fast_polling_override(void)
      return val == 1;
  }
  
@@ -63,7 +63,7 @@ index 08117c4c2b0..8d3f7c2c9a1 100644
  enum phys_device_bus_type {
      phys_device_bus_invalid = -1,
      phys_device_bus_pci,
-@@ -1288,6 +1350,21 @@ static HRESULT pulse_stream_connect(struct pulse_stream *stream, const char *pul
+@@ -1288,11 +1342,32 @@ static HRESULT pulse_stream_connect(struct pulse_stream *stream, const char *pul
      pa_stream_set_buffer_attr_callback(stream->stream, pulse_attr_update, stream);
      pa_stream_set_moved_callback(stream->stream, pulse_attr_update, stream);
  
@@ -96,7 +96,7 @@ index 08117c4c2b0..8d3f7c2c9a1 100644
      dump_attr(&attr);
  
      /* If specific device was requested, use it exactly */
-@@ -1327,8 +1404,48 @@ static NTSTATUS pulse_create_stream(void *args)
+@@ -1327,9 +1402,48 @@ static NTSTATUS pulse_create_stream(void *args)
          goto exit;
      }
  
@@ -145,7 +145,7 @@ index 08117c4c2b0..8d3f7c2c9a1 100644
  
      stream->share = params->share;
      stream->flags = params->flags;
-@@ -1849,8 +1966,9 @@ static NTSTATUS pulse_get_capture_buffer(void *args)
+@@ -1849,6 +1963,8 @@ static NTSTATUS pulse_get_capture_buffer(void *args)
          *params->frames = stream->period_bytes / pa_frame_size(&stream->ss);
          *params->flags = 0;
 -        if (packet->discont)
@@ -155,7 +155,7 @@ index 08117c4c2b0..8d3f7c2c9a1 100644
              *params->flags |= AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
          if (params->devpos)
          {
-@@ -1896,10 +2014,12 @@ static NTSTATUS pulse_release_capture_buffer(void *args)
+@@ -1896,10 +2012,12 @@ static NTSTATUS pulse_release_capture_buffer(void *args)
      {
          ACPacket *packet = stream->locked_ptr;
          stream->locked_ptr = NULL;
