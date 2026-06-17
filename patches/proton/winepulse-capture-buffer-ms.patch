@@ -1,11 +1,12 @@
 diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
-index 08117c4c2b0..f4c7a9b7c01 100644
+index 08117c4c2b0..8d3f7c2c9a1 100644
 --- a/dlls/winepulse.drv/pulse.c
 +++ b/dlls/winepulse.drv/pulse.c
-@@ -73,6 +73,27 @@ static BOOL get_fast_polling_override(void)
+@@ -73,6 +73,68 @@ static BOOL get_fast_polling_override(void)
      return val == 1;
  }
  
++/* AELORIA_VRC_CAPTURE_BUFFER_MS_PATCH_V2_FUNC */
 +static UINT32 get_capture_buffer_ms_override(void)
 +{
 +    static int val = -1;
@@ -26,13 +27,95 @@ index 08117c4c2b0..f4c7a9b7c01 100644
 +    return val > 0 ? val : 0;
 +}
 +
++/* AELORIA_VRC_CAPTURE_STABILITY_PATCH_V3_FUNC */
++static UINT32 get_env_uint32_override(const char *name)
++{
++    const char *env = getenv(name);
++    int val = env ? atoi(env) : 0;
++
++    return val > 0 ? val : 0;
++}
++
++static BOOL get_env_bool_override(const char *name)
++{
++    const char *env = getenv(name);
++
++    return env && atoi(env) != 0;
++}
++
++static UINT32 capture_ms_to_bytes(UINT32 ms, const pa_sample_spec *ss)
++{
++    SIZE_T frames;
++    SIZE_T bytes;
++
++    if (!ms || !ss || !ss->rate)
++        return 0;
++
++    frames = ((SIZE_T)ss->rate * ms + 999) / 1000;
++    bytes = frames * pa_frame_size(ss);
++
++    if (bytes > 0xffffffffu)
++        bytes = 0xffffffffu;
++
++    return (UINT32)bytes;
++}
++
  enum phys_device_bus_type {
      phys_device_bus_invalid = -1,
      phys_device_bus_pci,
-@@ -1296,6 +1317,17 @@ static NTSTATUS pulse_create_stream(void *args)
+@@ -1288,6 +1350,21 @@ static HRESULT pulse_stream_connect(struct pulse_stream *stream, const char *pul
+     pa_stream_set_buffer_attr_callback(stream->stream, pulse_attr_update, stream);
+     pa_stream_set_moved_callback(stream->stream, pulse_attr_update, stream);
  
++    /* AELORIA_VRC_CAPTURE_STABILITY_PATCH_V3_NO_ADJUST */
++    if (stream->dataflow == eCapture && get_env_bool_override("WINEPULSE_CAPTURE_NO_ADJUST_LATENCY"))
++    {
++        TRACE("Capture latency adjustment disabled by WINEPULSE_CAPTURE_NO_ADJUST_LATENCY\n");
++        flags &= ~PA_STREAM_ADJUST_LATENCY;
++    }
++
+     /* PulseAudio will fill in correct values */
+     attr.minreq = attr.fragsize = period_bytes;
+     attr.tlength = period_bytes * 3;
+     attr.maxlength = stream->bufsize_frames * pa_frame_size(&stream->ss);
+     attr.prebuf = pa_frame_size(&stream->ss);
++
++    /* AELORIA_VRC_CAPTURE_STABILITY_PATCH_V3_FRAGSIZE */
++    if (stream->dataflow == eCapture)
++    {
++        UINT32 capture_fragsize_ms = get_env_uint32_override("WINEPULSE_CAPTURE_FRAGSIZE_MS");
++        UINT32 capture_fragsize_bytes = capture_ms_to_bytes(capture_fragsize_ms, &stream->ss);
++
++        if (capture_fragsize_bytes)
++        {
++            TRACE("Capture fragsize override enabled: %u ms, %u bytes\n", capture_fragsize_ms, capture_fragsize_bytes);
++            attr.fragsize = capture_fragsize_bytes;
++        }
++    }
++
+     dump_attr(&attr);
+ 
+     /* If specific device was requested, use it exactly */
+@@ -1327,8 +1404,48 @@ static NTSTATUS pulse_create_stream(void *args)
+         goto exit;
+     }
+ 
++    /* AELORIA_VRC_CAPTURE_STABILITY_PATCH_V3_PERIOD */
++    if (stream->dataflow == eCapture)
++    {
++        UINT32 capture_period_ms = get_env_uint32_override("WINEPULSE_CAPTURE_PERIOD_MS");
++        UINT32 capture_period_bytes = capture_ms_to_bytes(capture_period_ms, &stream->ss);
++
++        if (capture_period_bytes)
++        {
++            TRACE("Capture period override enabled: %u ms, %u bytes\n", capture_period_ms, capture_period_bytes);
++            stream->period_bytes = capture_period_bytes;
++        }
++    }
++
      stream->bufsize_frames = ceil((params->duration / 10000000.) * params->fmt->nSamplesPerSec);
 +
++    /* AELORIA_VRC_CAPTURE_BUFFER_MS_PATCH_V2_USE */
 +    if (stream->dataflow == eCapture)
 +    {
 +        UINT32 capture_buffer_ms = get_capture_buffer_ms_override();
@@ -47,4 +130,42 @@ index 08117c4c2b0..f4c7a9b7c01 100644
 +
      bufsize_bytes = stream->bufsize_frames * pa_frame_size(&stream->ss);
      stream->mmdev_period_usec = params->period / (get_fast_polling_override() ? 50 : 10);
++
++    /* AELORIA_VRC_CAPTURE_STABILITY_PATCH_V3_TIMER */
++    if (stream->dataflow == eCapture)
++    {
++        UINT32 capture_timer_ms = get_env_uint32_override("WINEPULSE_CAPTURE_TIMER_MS");
++
++        if (capture_timer_ms)
++        {
++            TRACE("Capture timer override enabled: %u ms\n", capture_timer_ms);
++            stream->mmdev_period_usec = capture_timer_ms * 1000;
++        }
++    }
  
+     stream->share = params->share;
+     stream->flags = params->flags;
+@@ -1849,8 +1966,9 @@ static NTSTATUS pulse_get_capture_buffer(void *args)
+         *params->frames = stream->period_bytes / pa_frame_size(&stream->ss);
+         *params->flags = 0;
+-        if (packet->discont)
++
++        /* AELORIA_VRC_CAPTURE_STABILITY_PATCH_V3_HIDE_DISCONT_FLAG */
++        if (packet->discont && !get_env_bool_override("WINEPULSE_CAPTURE_HIDE_DISCONTINUITY"))
+             *params->flags |= AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
+         if (params->devpos)
+         {
+@@ -1896,10 +2014,12 @@ static NTSTATUS pulse_release_capture_buffer(void *args)
+     {
+         ACPacket *packet = stream->locked_ptr;
+         stream->locked_ptr = NULL;
+         stream->held_bytes -= stream->period_bytes;
+-        if (packet->discont)
++
++        /* AELORIA_VRC_CAPTURE_STABILITY_PATCH_V3_HIDE_DISCONT_CLOCK */
++        if (packet->discont && !get_env_bool_override("WINEPULSE_CAPTURE_HIDE_DISCONTINUITY"))
+             stream->clock_written += 2 * stream->period_bytes;
+         else
+             stream->clock_written += stream->period_bytes;
+         list_add_tail(&stream->packet_free_head, &packet->entry);
+     }
